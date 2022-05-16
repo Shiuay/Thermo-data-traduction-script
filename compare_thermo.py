@@ -1,15 +1,29 @@
 # -*- coding: utf-8 -*-
 """
-Created on Fri Apr 29 17:00:05 2022
 
-@author: veillet1
+Translates the species in thermo_data_file_1 to thermo_data_file_2.
+
 """
+
+"""----------------------------------------------------------------------------
+                                  IMPORTS
+----------------------------------------------------------------------------"""
 
 import numpy as np
 from operator import itemgetter
 import matplotlib.pyplot as plt
 
-N = 350
+"""----------------------------------------------------------------------------
+                                 PARAMETERS
+----------------------------------------------------------------------------"""
+
+N = 350 # Number of temperature points in Gibbs free energy
+thermo_data_file_1 = "New_Curran_NOX_GLARBORG_therm.dat"
+thermo_data_file_2 = "NASA.therm"
+
+"""----------------------------------------------------------------------------
+                   NASA COMPUTED THERMODYNAMIC FUNCTIONS
+----------------------------------------------------------------------------"""
 
 def cp(nasa_coeffs, temp):
     a = nasa_coeffs
@@ -25,6 +39,10 @@ def s(nasa_coeffs, temp):
     a = nasa_coeffs
     t = temp
     return a[0]*np.log(t) + a[1]*t + a[2]*t**2/2 + a[3]*t**3/3 + a[4]*t**4/4 + a[6]
+
+"""----------------------------------------------------------------------------
+                                    CLASSES
+----------------------------------------------------------------------------"""
 
 class ThermoData:
     def __init__(self, name=str(), atomic_composition=dict(), low_temp=float(), mid_temp=float(),
@@ -98,19 +116,9 @@ class Traduction:
         self.erreur = erreur
         self.species =  species
 
-# Olivia
-# with open("NASA.therm", 'r'):
-
-# New Methanol
-with open("New_Base_Methanol_THERMO.dat", 'r') as file:
-    methanol_file = file.readlines()
-
-# Curran
-with open("New_Curran_NOX_therm.dat", 'r') as file:
-    curran_file = file.readlines()
-
-with open("NASA.therm", 'r') as file:
-    pychegp_file = file.readlines()
+"""----------------------------------------------------------------------------
+                                 FUNCTIONS
+----------------------------------------------------------------------------"""
 
 def trim_and_uncomment(file_list):
     trimmed_file = list()
@@ -179,8 +187,8 @@ def read_chemkin(file):
             for i in range(4):
                 couple = line[24:44][i*5:(i+1)*5].split()
                 if len(couple) == 2:
-                    if int(couple[1]) != 0:
-                        atomic_composition[couple[0].upper()] = int(couple[1])
+                    if int(float(couple[1])) != 0:
+                        atomic_composition[couple[0].upper()] = int(float(couple[1]))
             therm.atomic_composition = atomic_composition
 
             # Recover high and low temperature intervals
@@ -257,33 +265,25 @@ def get_atomic_number(atom, atomic_composition):
 
 def comp_sort_key(atomic_composition):
     atoms_priority_list = ["N", "S", "C", "O", "H", "HE", "AR"]
-    # atoms_sort_order_list = [-1, -1, 1, 1, 1, 1, 1]
-    # sort_key = []
-    # for atom, sort_order in zip(atoms_priority_list, atoms_sort_order_list):
-        # sort_key.append(get_atomic_number(atom, atomic_composition)*sort_order)
     return [get_atomic_number(atom, atomic_composition) for atom in atoms_priority_list]
 
 def dict_sort_key(atom):
     atoms_priority_list = ["N", "S", "C", "O", "H", "HE", "AR"]
     return atoms_priority_list.index(atom[0])
 
-therms_curran = read_chemkin(trim_and_uncomment(curran_file))
-# for i, therm in enumerate(therms_curran):
-    # print(therm.name, therm.atomic_composition)
-    # print(therm.low_temp, therm.mid_temp, therm.high_temp)
-    # print("{}\n{}\n".format(therm.high_temp_nasa, therm.low_temp_nasa))
-    # temp, G = therm.G()
-    # print("{}\n{}\n{}\n".format(i, temp, G))
-    # print(len(therm.high_temp_nasa), len(therm.low_temp_nasa))
-    #, therm.low_temp_nasa, therm.high_temp_nasa)
-# for line in trim_and_uncomment(curran_file):
-    # print(line)
-# read(curran_file)
+"""----------------------------------------------------------------------------
+                                   SCRIPT
+----------------------------------------------------------------------------"""
 
+# Curran
+with open(thermo_data_file_1, 'r') as file:
+    curran_file = file.readlines()
+
+with open(thermo_data_file_2, 'r') as file:
+    pychegp_file = file.readlines()
+
+therms_curran = read_chemkin(trim_and_uncomment(curran_file))
 therms_pychegp = read_pychegp(pychegp_file)
-# for i, therm in enumerate(therms_pychegp):
-#     temp, G = therm.G()
-#     print("{}\n{}\n{}\n".format(i, temp, G))
 
 atomic_compositions = []
 for therm_curran in therms_curran:
@@ -305,35 +305,6 @@ for therm_pychegp in therms_pychegp:
     get_isomer_group(isomer_groups, therm_pychegp).pychegp_species.append(therm_pychegp)
 
 for isomer_group in isomer_groups:
-    # print([therm.name for therm in isomer_group.curran_species], [therm.name for therm in isomer_group.pychegp_species])
     # print(isomer_group.curran_species, isomer_group.pychegp_species)
     isomer_group.trad()
-    # print(isomer_group.traductions)
-
-# pychegp_species = ['C2H5O', 'PC2H4OH', 'SC2H4OH', 'CH3OCH2']
-# curran_species = ['C2H5O', '1C2H4OH', '2C2H4OH']
-# numpy.unravel_index(A.argmin(), A.shape)
-# for i
-
-possible_trads = dict()
-for i, therm_curran in enumerate(therms_curran):
-    possible_trads[therm_curran.name] = []
-    for therm_pychegp in therms_pychegp:
-        # print(therm_curran.atomic_composition)
-        # print(therm_pychegp.atomic_composition)
-        if therm_curran.atomic_composition == therm_pychegp.atomic_composition:
-            
-            error = calc_error(therm_curran, therm_pychegp)
-            possible_trad = (therm_pychegp.name, error)
-            possible_trads[therm_curran.name].append(possible_trad)
-            # if error > 1:
-                # plt.plot(temp, G_curran, "r", temp, G_pychegp, "b")
-                # plt.title("{} --> {}".format(therm_curran.name, therm_pychegp.name))
-                # print(therm_curran.high_temp_nasa)
-                # print(therm_pychegp.high_temp_nasa)
-                # print(therm_curran.low_temp_nasa)
-                # print(therm_pychegp.low_temp_nasa)
-                # print(therm_curran.mid_temp)
-                # plt.show()
-    possible_trads[therm_curran.name] = sorted(possible_trads[therm_curran.name], key=itemgetter(1))
-    # print("{} : {}".format(therm_curran.name, possible_trads[therm_curran.name]))
+    print(isomer_group.traductions)
