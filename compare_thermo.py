@@ -10,8 +10,8 @@ Translates the species in thermo_data_file_1 to thermo_data_file_2.
 ----------------------------------------------------------------------------"""
 
 import numpy as np
-from operator import itemgetter
 import matplotlib.pyplot as plt
+from molmass import Formula
 
 """----------------------------------------------------------------------------
                                  PARAMETERS
@@ -20,6 +20,8 @@ import matplotlib.pyplot as plt
 N = 350 # Number of temperature points in Gibbs free energy
 thermo_data_file_1 = "New_Curran_NOX_GLARBORG_therm.dat"
 thermo_data_file_2 = "NASA.therm"
+mech_file_name = "New_Curran_C2_NOX_GLARBORG.inp"
+output_name_file = "conversion_nomenclature_curran_glarborg_olivia.txt"
 
 """----------------------------------------------------------------------------
                    NASA COMPUTED THERMODYNAMIC FUNCTIONS
@@ -54,6 +56,8 @@ class ThermoData:
         self.low_temp = low_temp
         self.low_temp_nasa = low_temp_nasa
         self.high_temp_nasa = high_temp_nasa
+        self.empirical_formula = str()
+        self.molar_mass = float()
 
     def __repr__(self):
         return self.name
@@ -79,11 +83,15 @@ class ThermoData:
     def G(self):
         temp, a = self.calc_therm(s)
         temp, b = self.calc_therm(h)
-        print(temp)
         return temp, a - b
 
     def G_new(self, temp):
         return self.new_calc_therm(temp, s) - self.new_calc_therm(temp, h)
+
+    def calc_empirical_formula(self):
+        self.empirical_formula = "".join(["{}{}".format(key, value) if value != 1 else key
+                                     for key, value in self.atomic_composition.items()])
+        self.molar_mass = Formula(self.empirical_formula).mass
 
 class IsomerGroup:
     def __init__(self, atomic_composition=dict(), curran_species=list(),
@@ -92,15 +100,27 @@ class IsomerGroup:
         self.curran_species = curran_species
         self.pychegp_species = pychegp_species
         self.traductions = dict()
+        self.long_isomers_trad = dict()
+        self.errors = None
+        self.empirical_formula = str()
+        self.molar_mass = float()
+
+    def calc_empirical_formula(self):
+        self.empirical_formula = "".join(["{}{}".format(key, value) if value != 1 else key
+                                     for key, value in self.atomic_composition.items()])
+        self.molar_mass = Formula(self.empirical_formula).mass
 
     def trad(self):
         curran_species = [therm.name for therm in self.curran_species]
         pychegp_species = [therm.name for therm in self.pychegp_species]
+
+        # Check likely traductions
         trad_errors = np.zeros((len(curran_species), len(pychegp_species)))
         n_rows, n_columns = trad_errors.shape
         for i, curran_therm in enumerate(self.curran_species):
             for j, pychegp_therm in enumerate(self.pychegp_species):
                 trad_errors[i][j] = calc_error(curran_therm, pychegp_therm)
+        self.errors = trad_errors
         while 0 not in trad_errors.shape:
             i_min, j_min = np.unravel_index(trad_errors.argmin(), trad_errors.shape)
             if trad_errors[i_min][j_min] > 1:
@@ -110,6 +130,29 @@ class IsomerGroup:
             self.traductions[curran_species.pop(i_min)] = pychegp_species.pop(j_min)
             trad_errors = np.delete(trad_errors, i_min, 0)
             trad_errors = np.delete(trad_errors, j_min, 1)
+
+        # Rename species why name lenght > 10
+        isomer_id = 0
+        self.calc_empirical_formula()
+        for species in curran_species:
+            print("Pas de traduction possible trouvée pour {}".format(species))
+            if len(species) > 10:
+                name_already_exists = True
+                while name_already_exists:
+                    isomer_id += 1
+                    new_name = "{}-{}".format(self.empirical_formula, isomer_id)
+                    name_already_exists = new_name in curran_species + list(self.traductions.values())
+                self.long_isomers_trad[species] = new_name
+                print("{} renamed into {} due to its lenght".format(species, new_name))
+        for species in pychegp_species:
+            print("Pas d'antécédant possible pour {}".format(species))
+
+    def plot(self):
+        for therm_curran in self.curran_species:
+            plt.plot(*therm_curran.G(), label = therm_curran.name + " curran")
+        for therm_pychegp in self.pychegp_species:
+            plt.plot(*therm_pychegp.G(), label = therm_pychegp.name + " pychegp")
+        plt.legend()
 
 class Traduction:
     def __init__(self, erreur=float(), species=dict()):
@@ -188,7 +231,7 @@ def read_chemkin(file):
                 couple = line[24:44][i*5:(i+1)*5].split()
                 if len(couple) == 2:
                     if int(float(couple[1])) != 0:
-                        atomic_composition[couple[0].upper()] = int(float(couple[1]))
+                        atomic_composition[couple[0].lower().capitalize()] = int(float(couple[1]))
             therm.atomic_composition = atomic_composition
 
             # Recover high and low temperature intervals
@@ -229,7 +272,7 @@ def read_pychegp(file):
                 therm = ThermoData()
                 therm.name = line[0]
             elif i % 5 == 1:
-                therm.atomic_composition = dict([(line[i*2].upper(), int(line[i*2+1]))
+                therm.atomic_composition = dict([(line[i*2].lower().capitalize(), int(line[i*2+1]))
                 for i in range(int(len(line)/2)) if int(line[i*2+1]) != 0])
             elif i % 5 == 2:
                 therm.low_temp, therm.high_temp, therm.mid_temp = [float(temp) for temp in line]
@@ -264,27 +307,57 @@ def get_atomic_number(atom, atomic_composition):
         return 0
 
 def comp_sort_key(atomic_composition):
-    atoms_priority_list = ["N", "S", "C", "O", "H", "HE", "AR"]
+    atoms_priority_list = ["N", "S", "C", "O", "H", "He", "Ar"]
     return [get_atomic_number(atom, atomic_composition) for atom in atoms_priority_list]
 
 def dict_sort_key(atom):
-    atoms_priority_list = ["N", "S", "C", "O", "H", "HE", "AR"]
+    atoms_priority_list = ["N", "S", "C", "O", "H", "He", "Ar"]
     return atoms_priority_list.index(atom[0])
 
 """----------------------------------------------------------------------------
                                    SCRIPT
 ----------------------------------------------------------------------------"""
 
-# Curran
+# Open Files
 with open(thermo_data_file_1, 'r') as file:
     curran_file = file.readlines()
 
 with open(thermo_data_file_2, 'r') as file:
     pychegp_file = file.readlines()
 
+with open(mech_file_name, 'r', encoding="utf-8") as file:
+    mech_file = file.readlines()
+
+# Read Mech
+cleaned_mech_file = []
+for line in mech_file:
+    line = line.replace("\t", "    ")
+    try:
+        index = line.index("!")
+    except ValueError:
+        pass
+    else:
+        line = line[:index]
+    line = line.strip()
+    if line != "":
+        cleaned_mech_file.append(line)
+mech_file = cleaned_mech_file[cleaned_mech_file.index("SPECIES")+1:]
+mech_file = mech_file[:mech_file.index("END")]
+mech_species = " ".join(mech_file).split()
+
+# Read Therms
 therms_curran = read_chemkin(trim_and_uncomment(curran_file))
 therms_pychegp = read_pychegp(pychegp_file)
+therms_curran = [therm for therm in therms_curran if therm.name in mech_species]
+unique_therms_curran = []
+for species in list(set([therm.name for therm in therms_curran])):
+    for therm in therms_curran:
+        if therm.name == species:
+            unique_therms_curran.append(therm)
+            break
+therms_curran = unique_therms_curran
 
+# Read and sort isomer groups
 atomic_compositions = []
 for therm_curran in therms_curran:
     if therm_curran.atomic_composition not in atomic_compositions:
@@ -295,16 +368,56 @@ for therm_pychegp in therms_pychegp:
 atomic_compositions = [dict(sorted(atomic_composition.items(), key=dict_sort_key))
                        for atomic_composition in atomic_compositions]
 atomic_compositions = sorted(atomic_compositions, key=comp_sort_key)
-# print(atomic_compositions)
-
+for elt in atomic_compositions:
+    print(elt)
 isomer_groups = [IsomerGroup(atomic_composition=atomic_composition, curran_species=list(), pychegp_species=list()) for atomic_composition in atomic_compositions]
 
+# Add thermodynamic data to each isomer group
 for therm_curran in therms_curran:
     get_isomer_group(isomer_groups, therm_curran).curran_species.append(therm_curran)
 for therm_pychegp in therms_pychegp:
     get_isomer_group(isomer_groups, therm_pychegp).pychegp_species.append(therm_pychegp)
 
+# Calculate the translations to make
+trads = dict()
 for isomer_group in isomer_groups:
     # print(isomer_group.curran_species, isomer_group.pychegp_species)
     isomer_group.trad()
-    print(isomer_group.traductions)
+    trads |= isomer_group.traductions
+    trads |= isomer_group.long_isomers_trad
+    # if isomer_group.atomic_composition == {"N" : 1, "H" : 1, "O" : 3}:
+        # isomer_group.plot()
+
+# Write conversion nomenclature file
+with open(output_name_file, "w") as file:
+    for isomer_group in isomer_groups:
+        for key, trad in list(isomer_group.traductions.items()) + list(isomer_group.long_isomers_trad.items()):
+            file.write("{:16}=>      {:16}!\n".format(key, trad))
+
+with open("new_composes.dat", "w") as file:
+    for i, therm in enumerate(therms_curran):
+        therm.calc_empirical_formula()
+        try:
+            trad_name = trads[therm.name]
+        except KeyError:
+            trad_name = therm.name
+        file.write(("{:3d}  {:10}  {:>7.3f}" + "  {}"*4 + "\n").format(i+1, trad_name, therm.molar_mass, *[get_atomic_number(atom, therm.atomic_composition) for atom in ["C", "H", "O", "N"]]))
+
+# Write both pychegp nasa files
+with open("new_coeff_nasa.dat", "w") as coeff_nasa_file, open("new_nasa.therm", "w") as nasa_therm_file:
+    print("ICI ------------------------------")
+    for therm in therms_curran:
+        try:
+            trad_name = trads[therm.name]
+        except KeyError:
+            trad_name = therm.name
+        coeff_nasa_file.write(("{:18}  {:<4g} {:<5g} {:<5g}\n" + ("{: 14.8e} "*6 + "{: 14.8e}\n")*2) \
+        .format(trad_name, therm.low_temp, therm.high_temp, therm.mid_temp,
+                *therm.high_temp_nasa, *therm.low_temp_nasa))
+        nb_atoms = sum(therm.atomic_composition.values())
+        nb_different_atoms = len(therm.atomic_composition)
+        comp_str = "   ".join(["{} {:>2}".format(key, value) for key, value in therm.atomic_composition.items()])
+        nasa_therm_file.write(("{:14}{}  {}  {}  {}\n{}\n{:<4g} {:<5g} {:<4g}\n" + ("{: 14.8e} "*6 + "{: 14.8e}\n")*2) \
+            .format(trad_name, nb_atoms, nb_different_atoms, 0, 1, comp_str,
+                    therm.low_temp, therm.high_temp, therm.mid_temp,
+                    *therm.high_temp_nasa, *therm.low_temp_nasa))
